@@ -1,0 +1,426 @@
+{
+    "AWSTemplateFormatVersion" : "2010-09-09",
+    "Description" : "ShoppingCart Demo",
+    "Parameters" : {
+        "S3Bucket" : {
+            "Type" : "String",
+            "Description" : "Bucket to read and store data files",
+            "Default": "shoppingcart-summit"
+        },
+        "LogsUrl": {
+            "Type" : "String",
+            "Description" : "S3 Url to store log files",
+            "Default": "s3://logs.javieros.amazon.com/pipeline/"
+        },
+        "InstanceType": {
+            "Description": "Server used to COPY to Redshift and data generation server instance type",
+            "Type": "String",
+            "Default": "t2.small"
+        },
+        "EMRInstanceType": {
+            "Description": "EMR instance type",
+            "Type": "String",
+            "Default": "m3.xlarge"
+        },
+        "EMRRelease" : {
+            "Type" : "String",
+            "Description" : "EMR Release version",
+            "Default": "emr-4.6.0"
+        },
+        "KeyName" : {
+            "Type" : "AWS::EC2::KeyPair::KeyName",
+            "Description" : "Name of an existing EC2 KeyPair"
+        },
+        "RedshiftUserName" : {
+            "Type" : "String",
+            "Description" : "Redshift User Name",
+            "Default": "shoppingcartuser"
+        },
+        "RedshiftPassword" : {
+            "Type" : "String",
+            "Description" : "Redshift User Password",
+            "Default": "ShoppingPassword51",
+            "NoEcho" : "true"
+        }
+    },
+    "Mappings" : {
+        "AmazonLinuxAMI" : {
+            "us-east-1" : {
+                "AMI" : "ami-f5f41398"
+            },
+            "us-west-1" : {
+                "AMI" : "ami-d0f506b0"
+            },
+            "us-west-2" : {
+                "AMI" : "ami-6e84fa0e"
+            },
+            "eu-west-1" : {
+                "AMI" : "ami-b0ac25c3"
+            },
+            "eu-central-1" : {
+                "AMI" : "ami-d3c022bc"
+            },
+            "ap-northeast-1" : {
+                "AMI" : "ami-1ddc0b7e"
+            },
+            "ap-southeast-1" : {
+                "AMI" : "ami-cf32faa1"
+            },
+            "ap-southeast-2" : {
+                "AMI" : "ami-29160d47"
+            }
+        },
+        "VPCLayout" : {
+            "VPC" : { "CIDR" : "10.6.0.0/16" },
+            "PublicSubnetConfig" : { "CIDR" : "10.6.10.0/24" }
+        }
+    },
+    "Resources" : {
+        "VPC" : {
+            "Type" : "AWS::EC2::VPC",
+            "Properties" : {
+                "EnableDnsSupport" : "true",
+                "EnableDnsHostnames" : "true",
+                "CidrBlock" :  { "Fn::FindInMap" : [ "VPCLayout", "VPC", "CIDR" ]},
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "ShoppingCart"
+                    }
+                ]
+            }
+        },
+        "InternetGateway" : {
+            "Type" : "AWS::EC2::InternetGateway",
+            "DependsOn" : "VPC"
+        },
+        "AttachGateway" : {
+            "Type" : "AWS::EC2::VPCGatewayAttachment",
+            "DependsOn" : [
+                "VPC",
+                "InternetGateway"
+            ],
+            "Properties" : {
+                "VpcId" : {
+                    "Ref" : "VPC"
+                },
+                "InternetGatewayId" : {
+                    "Ref" : "InternetGateway"
+                }
+            }
+        },
+        "PublicSubnet" : {
+            "Type" : "AWS::EC2::Subnet",
+            "DependsOn" : "AttachGateway",
+            "Properties" : {
+                "VpcId" : { "Ref" : "VPC" },
+                "CidrBlock" : { "Fn::FindInMap" : [ "VPCLayout", "PublicSubnetConfig", "CIDR" ]},
+                "AvailabilityZone" : {
+                    "Fn::Select" : [
+                        "0",
+                        {
+                            "Fn::GetAZs" : ""
+                        }
+                    ]
+                },
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "Public Subnet"
+                    }
+                ]
+            }
+        },
+        "PublicRouteTable" : {
+            "Type" : "AWS::EC2::RouteTable",
+            "DependsOn" : [
+                "VPC",
+                "AttachGateway"
+            ],
+            "Properties" : {
+                "VpcId" : {
+                    "Ref" : "VPC"
+                },
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "Public"
+                    }
+                ]
+            }
+        },
+        "PublicRoute" : {
+            "Type" : "AWS::EC2::Route",
+            "DependsOn" : [
+                "PublicRouteTable",
+                "AttachGateway"
+            ],
+            "Properties" : {
+                "RouteTableId" : {
+                    "Ref" : "PublicRouteTable"
+                },
+                "DestinationCidrBlock" : "0.0.0.0/0",
+                "GatewayId" : {
+                    "Ref" : "InternetGateway"
+                }
+            }
+        },
+        "PublicSubnetRouteTableAssociation" : {
+            "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+            "DependsOn" : [
+                "PublicRouteTable",
+                "PublicSubnet",
+                "AttachGateway"
+            ],
+            "Properties" : {
+                "SubnetId" : {
+                    "Ref" : "PublicSubnet"
+                },
+                "RouteTableId" : {
+                    "Ref" : "PublicRouteTable"
+                }
+            }
+        },
+        "SecurityGroup" : {
+            "Type" : "AWS::EC2::SecurityGroup",
+            "DependsOn" : "AttachGateway",
+            "Properties" : {
+                "GroupDescription" : "Security Group for ShoppingCart",
+                "VpcId" : {
+                    "Ref" : "VPC"
+                },
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "SecurityGroup"
+                    }
+                ]
+            }
+        },
+        "SecurityGroupApps" : {
+            "Type" : "AWS::EC2::SecurityGroupIngress",
+            "DependsOn" : "SecurityGroup",
+            "Properties" : {
+                "GroupId" : { "Ref" : "SecurityGroup" },
+                "IpProtocol" : "tcp",
+                "FromPort" : 0,
+                "ToPort" : 65535,
+                "SourceSecurityGroupId" : { "Ref" : "SecurityGroup" }
+            }
+        },
+        "SecurityGroupAppsSSH" : {
+            "Type" : "AWS::EC2::SecurityGroupIngress",
+            "DependsOn" : "SecurityGroup",
+            "Properties" : {
+                "GroupId" : { "Ref" : "SecurityGroup" },
+                "IpProtocol" : "tcp",
+                "FromPort" : 22,
+                "ToPort" : 22,
+                "CidrIp" : "0.0.0.0/0"
+            }
+        },
+        "RedshiftClusterSubnet": {
+            "Type": "AWS::Redshift::ClusterSubnetGroup",
+            "Properties": {
+                "Description" : "ShoppintCart Redshit Subnet",
+                "SubnetIds" : [ {"Ref": "PublicSubnet"} ]
+          }
+        },
+        "RedshiftCluster": {
+            "Type": "AWS::Redshift::Cluster",
+            "Properties": {
+                "VpcSecurityGroupIds": [{"Ref": "SecurityGroup"}],
+                "ClusterType": "single-node",
+                "DBName": "shoppingcart",
+                "MasterUsername": {"Ref": "RedshiftUserName"},
+                "MasterUserPassword": {"Ref": "RedshiftPassword"},
+                "NodeType": "dc1.large",
+                "PubliclyAccessible": true,
+                "ClusterSubnetGroupName": {"Ref": "RedshiftClusterSubnet"}
+            } 
+        },
+        "DataPipeline": {
+            "Type" : "AWS::DataPipeline::Pipeline",
+            "Properties" : {
+                "Activate" : true,
+                "Description" : "Pipeline to process Shopping Cart events and store them in Redshift",
+                "Name" : "DataProcessingPipeline",
+                "PipelineObjects" : [
+                    {
+                        "Name": "Every 1 hour",
+                        "Id": "DefaultSchedule",
+                        "Fields": [
+                            {"Key": "type", "StringValue": "Schedule"},
+                            {"Key": "period", "StringValue": "1 Hour"},
+                            {"Key": "startAt", "StringValue": "FIRST_ACTIVATION_DATE_TIME"}
+                        ] 
+                    },
+                    {
+                        "Name": "ImportToRedshift",
+                        "Id": "RedshiftCopyActivityId_xW6OZ",
+                        "Fields": [
+                            {"Key": "output", "RefValue": "DataNodeId_ANgH8"},
+                            {"Key": "input", "RefValue": "DataNodeId_5INVj"},
+                            {"Key": "schedule", "RefValue": "DefaultSchedule"},
+                            {"Key": "dependsOn", "RefValue": "PigActivityId_U8gUA"},
+                            {"Key": "runsOn", "RefValue": "ResourceId_IcqMi"},
+                            {"Key": "transformSql", "StringValue": "select customer, cart, duration, buy, added, removed, thinking, cartstart, (TIMESTAMP 'epoch' + cartstart * INTERVAL '1 Second ') as cartstarttime from staging"},
+                            {"Key": "type", "StringValue": "RedshiftCopyActivity"},
+                            {"Key": "insertMode", "StringValue": "APPEND"}
+                        ] 
+                    },
+                    {
+                        "Name": "Default",
+                        "Id": "Default",
+                        "Fields": [
+                            {"Key": "schedule", "RefValue": "DefaultSchedule"},
+                            {"Key": "type", "StringValue": "Default"},
+                            {"Key": "failureAndRerunMode", "StringValue": "CASCADE"},
+                            {"Key": "resourceRole", "StringValue": "DataPipelineDefaultResourceRole"},
+                            {"Key": "role", "StringValue": "DataPipelineDefaultRole"},
+                            {"Key": "pipelineLogUri", "StringValue": {"Ref": "LogsUrl"}},
+                            {"Key": "scheduleType", "StringValue": "cron"}
+                        ]
+                    },
+                    {
+                        "Name": "RedshiftInputData",
+                        "Id": "DataNodeId_5INVj",
+                        "Fields": [
+                            {"Key": "schedule", "RefValue": "DefaultSchedule"},
+                            {"Key": "dataFormat", "RefValue": "DataFormatId_aos53"},
+                            {"Key": "filePath", "StringValue": { "Fn::Join": ["", [ "s3://", {"Ref": "S3Bucket"}, "/redshift/#{format(minusHours(@scheduledStartTime,1),'YYYY/MM/dd/HH')}/part"]]}},
+                            {"Key": "type", "StringValue": "S3DataNode"}
+                        ]
+                    },
+                    {
+                        "Name": "SQLRunCommand",
+                        "Id": "ResourceId_IcqMi",
+                        "Fields": [
+                            {"Key": "schedule", "RefValue": "DefaultSchedule"},
+                            {"Key": "subnetId", "StringValue": {"Ref": "PublicSubnet"}},
+                            {"Key": "role", "StringValue": "DataPipelineDefaultRole"},
+                            {"Key": "imageId", "StringValue": { "Fn::FindInMap" : [ "AmazonLinuxAMI", { "Ref" : "AWS::Region" }, "AMI" ] }},
+                            {"Key": "instanceType", "StringValue": {"Ref": "InstanceType"}},
+                            {"Key": "type", "StringValue": "Ec2Resource"},
+                            {"Key": "terminateAfter", "StringValue": "3 Hours"},
+                            {"Key": "resourceRole", "StringValue": "DataPipelineDefaultResourceRole"},
+                            {"Key": "securityGroupIds", "StringValue": {"Ref": "SecurityGroup"}},
+                            {"Key": "keyPair", "StringValue": {"Ref": "KeyName"}},
+                            {"Key": "associatePublicIpAddress", "StringValue": "true"}
+                        ]
+                    },
+                    {
+                        "Name": "TransformationCluster",
+                        "Id": "EmrClusterId_rpW2P",
+                        "Fields": [
+                            {"Key": "schedule", "RefValue": "DefaultSchedule"},
+                            {"Key": "coreInstanceCount", "StringValue": "1"},
+                            {"Key": "keyPair", "StringValue": {"Ref": "KeyName"}},
+                            {"Key": "releaseLabel", "StringValue": {"Ref": "EMRRelease"}},
+                            {"Key": "type", "StringValue": "EmrCluster"},
+                            {"Key": "masterInstanceType", "StringValue": {"Ref": "EMRInstanceType"}},
+                            {"Key": "terminateAfter", "StringValue": "3 Hours"}
+                        ]
+                    },
+                    {
+                        "Name": "DataTransformation",
+                        "Id": "PigActivityId_U8gUA",
+                        "Fields": [
+                            {"Key": "schedule", "RefValue": "DefaultSchedule"},
+                            {"Key": "runsOn", "RefValue": "EmrClusterId_rpW2P"},
+                            {"Key": "type", "StringValue": "PigActivity"},
+                            {"Key": "scriptVariable", "StringValue": "inputdate=#{format(minusHours(@scheduledStartTime,1),'YYYY/MM/dd/HH')}"},
+                            {"Key": "script", "StringValue": { "Fn::Join": ["", [ "DATA = LOAD 's3://", {"Ref": "S3Bucket"}, "/streams/$inputdate/*' USING JsonLoader('type:chararray,timestamp:int,customer:int,cart:long,product:chararray, productlist: chararray');\nDATA2 = FILTER DATA BY type is not null;\nCARTS = GROUP DATA2 BY cart;\nCARTDATA = FOREACH CARTS { \n\tLOGIN = FILTER DATA2 BY type == 'login';\n\tADDED = FILTER DATA2 BY type == 'productAdded';\n\tREMOVED = FILTER DATA2 BY type == 'productRemoved';\n\tBUY = FILTER DATA2 BY type == 'cartBuy';\n\tGENERATE MAX(DATA2.customer) AS customer, group AS cart, MAX(DATA2.timestamp)-MIN(DATA2.timestamp) AS duration, \n\t\tIsEmpty(BUY) AS buy, COUNT_STAR(ADDED) AS added, \n\t\tCOUNT_STAR(REMOVED) AS removed, MAX(DATA2.timestamp)-MAX(ADDED.timestamp) AS thinking,\n\t\tMIN(LOGIN.timestamp) AS timestamp, '\"\"';\n};\nSTORE CARTDATA INTO 's3://", {"Ref": "S3Bucket"}, "/redshift/$inputdate/' USING PigStorage(',');"]]}}
+                        ]
+                    },
+                    {
+                        "Name": "RedshiftInputFormat",
+                        "Id": "DataFormatId_aos53",
+                        "Fields": [
+                            {"Key": "type", "StringValue": "CSV"}
+                        ]
+                    },
+                    {
+                        "Name": "RedshiftDatabase",
+                        "Id": "RedshiftDatabaseId_Q1Cnk",
+                        "Fields": [
+                            {"Key": "connectionString", "StringValue": {"Fn::Join": ["", ["jdbc:redshift://", {"Fn::GetAtt": ["RedshiftCluster", "Endpoint.Address"]}, ":", {"Fn::GetAtt": ["RedshiftCluster", "Endpoint.Port"]}, "/shoppingcart"]]} },
+                            {"Key": "*password", "StringValue": {"Ref": "RedshiftPassword"}},
+                            {"Key": "type", "StringValue": "RedshiftDatabase"},
+                            {"Key": "username", "StringValue": {"Ref": "RedshiftUserName"}}
+                        ]
+                    },
+                    {
+                        "Name": "RedshiftNode",
+                        "Id": "DataNodeId_ANgH8",
+                        "Fields": [
+                            {"Key": "schedule", "RefValue": "DefaultSchedule"},
+                            {"Key": "database", "RefValue": "RedshiftDatabaseId_Q1Cnk"},
+                            {"Key": "createTableSql", "StringValue": "CREATE TABLE shoppingcart\n(\n   customer       integer,\n   cart           bigint,\n   duration       integer,\n   buy            varchar(10),\n   added          integer,\n   removed        integer,\n   thinking       integer,\n   cartstart      bigint,\n   cartstarttime  timestamp\n) \ndistkey (customer) \nsortkey (cartstarttime);"},
+                            {"Key": "type", "StringValue": "RedshiftDataNode"},
+                            {"Key": "tableName", "StringValue": "shoppingcart"}
+                        ]
+                    }
+                ]
+            }
+        },
+        "InstanceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version" : "2012-10-17",
+                    "Statement": [ {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [ "ec2.amazonaws.com" ]
+                        },
+                        "Action": [ "sts:AssumeRole" ]
+                    } ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/AmazonKinesisFirehoseFullAccess"
+                ],
+                "Path": "/"
+            }
+        },
+        "InstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [ {
+                    "Ref": "InstanceRole"
+                } ]
+            }
+        },
+        "DataGeneration": {
+            "Type": "AWS::EC2::Instance",
+            "Properties": {
+                "KeyName": { "Ref": "KeyName" },
+                "ImageId": { "Fn::FindInMap" : [ "AmazonLinuxAMI", { "Ref" : "AWS::Region" }, "AMI" ] },
+                "InstanceType": { "Ref": "InstanceType" },
+                "IamInstanceProfile": { "Ref" : "InstanceProfile" },
+                "NetworkInterfaces": [ {
+                    "AssociatePublicIpAddress": "true",
+                    "DeviceIndex": "0",
+                    "GroupSet": [{ "Ref" : "SecurityGroup" }],
+                    "SubnetId": { "Ref" : "PublicSubnet" }
+                } ],
+                "UserData": { "Fn::Base64" : { "Fn::Join" : ["", [
+                    "#!/bin/bash\n",
+                    "yum update -y aws-cfn-bootstrap\n",
+                    "yum -y install golang\n",
+                    "wget https://s3-eu-west-1.amazonaws.com/amzsup/DataGeneration.go\n",
+                    "GOPATH=/root go get github.com/aws/aws-sdk-go/...\n",
+                    "GOPATH=/root go get github.com/agoussia/godes\n",
+                    "GOPATH=/root go build DataGeneration.go\n",
+                    "cp DataGeneration /usr/local/bin/\n",
+                    "echo '*/5 * * * * root /usr/local/bin/DataGeneration >> /var/log/datageneration' >> /etc/crontab\n",
+                    "service crond restart\n"
+                ]]}},
+                "Tags" : [
+                    { "Key" : "Name", "Value" : "Data Generation" }
+                ]
+            }
+        }
+    }
+}
