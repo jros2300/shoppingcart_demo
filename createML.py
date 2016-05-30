@@ -11,16 +11,18 @@ import time
 parser = argparse.ArgumentParser(description='Create the necessary resources to use the ShoppingCart Demo.')
 parser.add_argument('-b', '--bucket', dest='bucket', action='store', required=True,
                     help='The bucket to store the events')
+parser.add_argument('-r', '--region', dest='region', action='store', required=True,
+                    help='The region to create the MachineLearning model')
 parser.add_argument('--debug', action='store_true')
 args = parser.parse_args()    
 
-ml = boto3.client('machinelearning')
+ml = boto3.client('machinelearning', region_name=args.region)
 
 def print_debug(response, debug):
     if debug:
         print(response)
 
-        
+
 try:
     response = ml.describe_evaluations(
         FilterVariable='Name',
