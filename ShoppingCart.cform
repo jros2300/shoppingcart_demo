@@ -114,6 +114,7 @@
             "DependsOn" : "AttachGateway",
             "Properties" : {
                 "VpcId" : { "Ref" : "VPC" },
+                "MapPublicIpOnLaunch": true,
                 "CidrBlock" : { "Fn::FindInMap" : [ "VPCLayout", "PublicSubnetConfig", "CIDR" ]},
                 "AvailabilityZone" : {
                     "Fn::Select" : [
@@ -276,8 +277,8 @@
                             {"Key": "schedule", "RefValue": "DefaultSchedule"},
                             {"Key": "type", "StringValue": "Default"},
                             {"Key": "failureAndRerunMode", "StringValue": "CASCADE"},
-                            {"Key": "resourceRole", "StringValue": "DataPipelineDefaultResourceRole"},
-                            {"Key": "role", "StringValue": "DataPipelineDefaultRole"},
+                            {"Key": "resourceRole", "StringValue": {"Ref": "DataPipelineResourceRoleProfile"}},
+                            {"Key": "role", "StringValue": {"Ref": "DataPipelineRole"}},
                             {"Key": "pipelineLogUri", "StringValue": {"Ref": "LogsUrl"}},
                             {"Key": "scheduleType", "StringValue": "cron"}
                         ]
@@ -298,12 +299,12 @@
                         "Fields": [
                             {"Key": "schedule", "RefValue": "DefaultSchedule"},
                             {"Key": "subnetId", "StringValue": {"Ref": "PublicSubnet"}},
-                            {"Key": "role", "StringValue": "DataPipelineDefaultRole"},
+                            {"Key": "role", "StringValue": {"Ref": "DataPipelineRole"}},
                             {"Key": "imageId", "StringValue": { "Fn::FindInMap" : [ "AmazonLinuxAMI", { "Ref" : "AWS::Region" }, "AMI" ] }},
                             {"Key": "instanceType", "StringValue": {"Ref": "InstanceType"}},
                             {"Key": "type", "StringValue": "Ec2Resource"},
                             {"Key": "terminateAfter", "StringValue": "3 Hours"},
-                            {"Key": "resourceRole", "StringValue": "DataPipelineDefaultResourceRole"},
+                            {"Key": "resourceRole", "StringValue": {"Ref": "DataPipelineResourceRoleProfile"}},
                             {"Key": "securityGroupIds", "StringValue": {"Ref": "SecurityGroup"}},
                             {"Key": "keyPair", "StringValue": {"Ref": "KeyName"}},
                             {"Key": "associatePublicIpAddress", "StringValue": "true"}
@@ -317,6 +318,7 @@
                             {"Key": "coreInstanceCount", "StringValue": "1"},
                             {"Key": "keyPair", "StringValue": {"Ref": "KeyName"}},
                             {"Key": "releaseLabel", "StringValue": {"Ref": "EMRRelease"}},
+                            {"Key": "subnetId", "StringValue": {"Ref": "PublicSubnet"}},
                             {"Key": "type", "StringValue": "EmrCluster"},
                             {"Key": "masterInstanceType", "StringValue": {"Ref": "EMRInstanceType"}},
                             {"Key": "terminateAfter", "StringValue": "3 Hours"}
@@ -362,6 +364,125 @@
                         ]
                     }
                 ]
+            }
+        },
+        "DataPipelineML": {
+            "Type" : "AWS::DataPipeline::Pipeline",
+            "Properties" : {
+                "Activate" : true,
+                "Description" : "Pipeline to process Shopping Cart events and train a MachineLearning model",
+                "Name" : "DataProcessingToMachineLearning",
+                "PipelineObjects" : [
+                    {
+                        "Name": "CreateMLModel",
+                        "Id": "ShellCommandActivityId_CCzdd",
+                        "Fields": [
+                            {"Key": "dependsOn", "RefValue": "PigActivityId_U8gUA"},
+                            {"Key": "runsOn", "RefValue": "ResourceId_PLRU0"},
+                            {"Key": "command", "StringValue": { "Fn::Join": ["", [ "wget https://raw.githubusercontent.com/jros2300/shoppingcart_demo/master/createML.py\nsudo yum install -y python-pip\nsudo pip install boto3\npython createML.py -b ", {"Ref": "S3Bucket"}, " -r ",  { "Ref" : "AWS::Region" }]]}},
+                            {"Key": "type", "StringValue": "ShellCommandActivity"}
+                        ] 
+                    },
+                    {
+                        "Name": "Default",
+                        "Id": "Default",
+                        "Fields": [
+                            {"Key": "type", "StringValue": "Default"},
+                            {"Key": "failureAndRerunMode", "StringValue": "CASCADE"},
+                            {"Key": "resourceRole", "StringValue": {"Ref": "DataPipelineResourceRoleProfile"}},
+                            {"Key": "role", "StringValue": {"Ref": "DataPipelineRole"}},
+                            {"Key": "pipelineLogUri", "StringValue": {"Ref": "LogsUrl"}},
+                            {"Key": "scheduleType", "StringValue": "ONDEMAND"}
+                        ]
+                    },
+                    {
+                        "Name": "EC2Instance",
+                        "Id": "ResourceId_PLRU0",
+                        "Fields": [
+                            {"Key": "subnetId", "StringValue": {"Ref": "PublicSubnet"}},
+                            {"Key": "role", "StringValue": {"Ref": "DataPipelineRole"}},
+                            {"Key": "imageId", "StringValue": { "Fn::FindInMap" : [ "AmazonLinuxAMI", { "Ref" : "AWS::Region" }, "AMI" ] }},
+                            {"Key": "instanceType", "StringValue": {"Ref": "InstanceType"}},
+                            {"Key": "type", "StringValue": "Ec2Resource"},
+                            {"Key": "terminateAfter", "StringValue": "3 Hours"},
+                            {"Key": "resourceRole", "StringValue": {"Ref": "DataPipelineResourceRoleProfile"}},
+                            {"Key": "securityGroupIds", "StringValue": {"Ref": "SecurityGroup"}},
+                            {"Key": "keyPair", "StringValue": {"Ref": "KeyName"}},
+                            {"Key": "associatePublicIpAddress", "StringValue": "true"}
+                        ]
+                    },
+                    {
+                        "Name": "TransformationCluster",
+                        "Id": "EmrClusterId_rpW2P",
+                        "Fields": [
+                            {"Key": "coreInstanceCount", "StringValue": "1"},
+                            {"Key": "keyPair", "StringValue": {"Ref": "KeyName"}},
+                            {"Key": "releaseLabel", "StringValue": {"Ref": "EMRRelease"}},
+                            {"Key": "type", "StringValue": "EmrCluster"},
+                            {"Key": "subnetId", "StringValue": {"Ref": "PublicSubnet"}},
+                            {"Key": "masterInstanceType", "StringValue": {"Ref": "EMRInstanceType"}},
+                            {"Key": "terminateAfter", "StringValue": "3 Hours"}
+                        ]
+                    },
+                    {
+                        "Name": "DataTransformation",
+                        "Id": "PigActivityId_U8gUA",
+                        "Fields": [
+                            {"Key": "runsOn", "RefValue": "EmrClusterId_rpW2P"},
+                            {"Key": "type", "StringValue": "PigActivity"},
+                            {"Key": "scriptVariable", "StringValue": "inputdate=#{format(minusDays(@scheduledStartTime,1),'YYYY/MM/dd')}"},
+                            {"Key": "script", "StringValue": { "Fn::Join": ["", [ "DATA = LOAD 's3://", {"Ref": "S3Bucket"}, "/streams/$inputdate/*/*' USING JsonLoader('type:chararray,timestamp:int,customer:int,cart:long,product:chararray, productlist: chararray');\nDATA2 = FILTER DATA BY type is not null;\nCARTS = GROUP DATA2 BY cart;\nCARTDATA = FOREACH CARTS { \n\tLOGIN = FILTER DATA2 BY type == 'login';\n\tADDED = FILTER DATA2 BY type == 'productAdded';\n\tREMOVED = FILTER DATA2 BY type == 'productRemoved';\n\tBUY = FILTER DATA2 BY type == 'cartBuy';\n\tBUYORDISCART = FILTER DATA2 BY type == 'cartBuy' OR type == 'cartDiscard';\n\tGENERATE MAX(DATA2.customer) AS customer, group AS cart, MAX(DATA2.timestamp)-MIN(LOGIN.timestamp) AS duration, \n\t\tIsEmpty(BUY) AS buy, COUNT_STAR(ADDED) AS added, \n\t\tCOUNT_STAR(REMOVED) AS removed, MAX(DATA2.timestamp)-MAX(ADDED.timestamp) AS thinking,\n\t\tBagToString(ADDED.product, '-') AS productsadded, BagToString(REMOVED.product, '-') AS productsremoved,\n\t\tBagToString(BUYORDISCART.productlist, '-'), MIN(LOGIN.timestamp) AS timestamp;\n};\nSTORE CARTDATA INTO 's3://", {"Ref": "S3Bucket"}, "/ml/$inputdate/' USING PigStorage(',');"]]}}
+                        ]
+                    }
+                ]
+            }
+        },
+        "DataPipelineRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version" : "2012-10-17",
+                    "Statement": [ {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [ "datapipeline.amazonaws.com", "elasticmapreduce.amazonaws.com" ]
+                        },
+                        "Action": [ "sts:AssumeRole" ]
+                    } ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AWSDataPipelineRole"
+                ],
+                "Path": "/"
+            }
+        },
+        "DataPipelineResourceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version" : "2012-10-17",
+                    "Statement": [ {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [ "ec2.amazonaws.com" ]
+                        },
+                        "Action": [ "sts:AssumeRole" ]
+                    } ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforDataPipelineRole",
+                    "arn:aws:iam::aws:policy/AmazonMachineLearningFullAccess"
+                ],
+                "Path": "/"
+            }
+        },
+        "DataPipelineResourceRoleProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [ {
+                    "Ref": "DataPipelineResourceRole"
+                } ]
             }
         },
         "InstanceRole": {
